@@ -1,0 +1,121 @@
+DROP TABLE IF EXISTS poigeoblockscore_160215160410 ;
+CREATE TABLE poigeoblockscore_160215160410 (poiid INT, scores STRING) partitioned by (scoretype STRING) ;
+
+INSERT OVERWRITE TABLE poigeoblockscore_160215160410 PARTITION (scoretype = 'unnormfilter')
+SELECT poiid, blkscores FROM locvisual_poigeoblkscore_gblkcatmgr_0215_0410_filtered ;
+
+INSERT OVERWRITE TABLE poigeoblockscore_160215160410 PARTITION (scoretype = 'normfilter')
+SELECT poiid, scores FROM locvisual_poigeoblkscore_normed_0215_0410_filtered ;
+
+INSERT OVERWRITE TABLE poigeoblockscore_160215160410 PARTITION (scoretype = 'unnorm')
+SELECT poiid, blkscores FROM locvisual_poigeoblkscore_gblkcatmgr_0215_0410 ;
+
+INSERT OVERWRITE TABLE poigeoblockscore_160215160410 PARTITION (scoretype = 'norm')
+SELECT poiid, scores FROM locvisual_poigeoblkscore_normed_0215_0410 ;
+
+
+
+# ADD FILE /Users/richardchiou/Desktop/geoblk/scoring/mergingscores.py;
+ADD FILE /home/canliang/locvisual/scoring/mergingscores.py ;
+
+DROP TABLE IF EXISTS gblkscores_merged ;
+CREATE TABLE gblkscores_merged (poiid INT, scores STRING) PARTITIONED BY (scoretype STRING) ;
+
+
+
+INSERT OVERWRITE TABLE gblkscores_merged PARTITION (scoretype = '0')
+SELECT *
+FROM   (SELECT TRANSFORM (NULL, NULL, poiid, 0, scores)
+               USING    'python ./mergingscores.py'
+               AS       (poiid, scores)
+        FROM  (SELECT * FROM poigeoblockscore_160215160410 WHERE scoretype = 'unnormfilter' ) T0
+       ) T1 ;
+
+
+
+INSERT OVERWRITE TABLE gblkscores_merged PARTITION (scoretype = '1')
+SELECT *
+FROM   (SELECT TRANSFORM (T1.poiid, T1.scores, T2.poiid, 1, T2.scores)
+               USING    'python ./mergingscores.py'
+               AS       (poiid, scores)
+        FROM   (SELECT * FROM gblkscores_merged WHERE scoretype = '0') T1
+               JOIN
+               (SELECT * FROM poigeoblockscore_160215160410 WHERE scoretype = 'normfilter' ) T2
+               ON T1.poiid = T2.poiid
+    ) T3      ;
+
+
+
+INSERT OVERWRITE TABLE gblkscores_merged PARTITION (scoretype = '3')
+SELECT *
+FROM   (SELECT TRANSFORM (T1.poiid, T1.scores, T2.poiid, 3, T2.scores)
+               USING    'python ./mergingscores.py'
+               AS       (poiid, geoblk2scores)
+        FROM   (SELECT * FROM gblkscores_merged WHERE scoretype = '1') T1
+               JOIN
+               (SELECT * FROM poigeoblockscore_160215160410 WHERE scoretype = 'unnorm' ) T2
+               ON T1.poiid = T2.poiid
+    ) T3      ;
+
+
+
+INSERT OVERWRITE TABLE gblkscores_merged PARTITION (scoretype = '4')
+SELECT *
+FROM   (SELECT TRANSFORM (T1.poiid, T1.scores, T2.poiid, 4, T2.scores)
+               USING    'python ./mergingscores.py'
+               AS       (poiid, scores)
+        FROM   (SELECT * FROM gblkscores_merged WHERE scoretype = '3') T1
+               JOIN
+               (SELECT * FROM poigeoblockscore_160215160410 WHERE scoretype = 'norm' ) T2
+               ON T1.poiid = T2.poiid
+    ) T3      ;
+
+
+
+-- this 'targetting' score must come at last. Because of the 'full join'
+INSERT OVERWRITE TABLE gblkscores_merged PARTITION (scoretype = '2')
+SELECT *
+FROM   (SELECT TRANSFORM (T1.poiid, T1.scores, T2.poiid, 2, T2.scores)
+               USING    'python ./mergingscores.py'
+               AS       (poiid, scores)
+        FROM   (SELECT * FROM gblkscores_merged WHERE scoretype = '4') T1
+               FULL JOIN
+               poigeoblkscore_target_0215_0410 T2
+               ON T1.poiid = T2.poiid
+    ) T3      ;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+DROP TABLE IF EXISTS gblkscores_merged_out ;
+CREATE TABLE gblkscores_merged_out AS
+SELECT T1.poiid, T2.hashkey, T2.brandid, T1.scores
+FROM   (SELECT * FROM gblkscores_merged WHERE scoretype = '2' ) T1
+       JOIN
+       (SELECT poiid, hashkey, brandid FROM poidata WHERE poiid IS NOT NULL AND hashkey IS NOT NULL ) T2
+       ON T1.poiid = T2.poiid ;
+
+
+
+
+
+hive -e 'SELECT NULL, NULL, poiid, 0, blkscores FROM blklearn.locvisual_poigeoblkscore_gblkcatmgr_0215_0410 LIMIT 1000; ' > testdata.txt
+hive -e 'SELECT T1.poiid, T1.geoblk2scores, T2.poiid, 1, T2.scores FROM blklearn.gblk_mergedscores T1 FULL OUTER JOIN blklearn.locvisual_poigeoblkscore_normed_0215_0410 T2 ON T1.poiid = T2.poiid limit 1000;' > testdata.txt
+
+
+
+hive -e 'SELECT hashkey, scores, brandid FROM blklearn.gblkscores_merged_out ; ' > poi2blockscore.txt

@@ -1,0 +1,73 @@
+SET mapred.job.queue.name = canliang ; SET tez.queue.name=canliang ;
+
+
+CREATE TABLE poiuidvisit_agg (brandid INT, poiid INT, uid STRING) partitioned by (fencetype string) ;
+
+
+DROP TABLE IF EXISTS poiuidvisit_agg_instore_tmp ;
+CREATE TABLE poiuidvisit_agg_instore_tmp AS
+SELECT T1.brandid, T2.poiid, T2.uid
+FROM   poidata T1 JOIN (SELECT poi as poiid, uid FROM poiuidvisits WHERE dt >= '2015-12-21' and dt <= '2016-01-31' AND instore = 1 ) T2
+       ON T1.poiid = T2.poiid
+GROUP BY T1.brandid, T2.poiid, T2.uid ;
+
+
+INSERT INTO TABLE poiuidvisit_agg_instore_tmp
+SELECT T1.brandid, T2.poiid, T2.uid
+FROM   poidata T1 JOIN (SELECT poi as poiid, uid FROM poiuidvisits WHERE dt >= '2016-02-01' and dt <= '2016-03-31' AND instore = 1 ) T2
+       ON T1.poiid = T2.poiid
+GROUP BY T1.brandid, T2.poiid, T2.uid ;
+
+
+INSERT INTO TABLE poiuidvisit_agg_instore_tmp
+SELECT T1.brandid, T2.poiid, T2.uid
+FROM   poidata T1 JOIN (SELECT poi as poiid, uid FROM poiuidvisits WHERE dt >= '2016-04-01' and dt <= '2016-06-22' AND instore = 1 ) T2
+       ON T1.poiid = T2.poiid
+GROUP BY T1.brandid, T2.poiid, T2.uid ;
+
+
+INSERT INTO poiuidvisit_agg partition (fencetype = 'instore')
+SELECT brandid, poiid, uid FROM poiuidvisit_agg_instore_tmp GROUP BY brandid, poiid, uid ;
+
+DROP TABLE IF EXISTS poiuidvisit_agg_instore_tmp ;
+
+
+
+DROP TABLE IF EXISTS poiuidvisit_agg_onlot_tmp ;
+CREATE TABLE poiuidvisit_agg_onlot_tmp AS
+SELECT T1.brandid, T2.poiid, T2.uid
+FROM   poidata T1 JOIN (SELECT poi as poiid, uid FROM poiuidvisits WHERE dt >= '2015-12-21' and dt <= '2016-01-31' AND onlot = 1 ) T2
+       ON T1.poiid = T2.poiid
+GROUP BY T1.brandid, T2.poiid, T2.uid ;
+
+
+INSERT INTO TABLE poiuidvisit_agg_onlot_tmp
+SELECT T1.brandid, T2.poiid, T2.uid
+FROM   poidata T1 JOIN (SELECT poi as poiid, uid FROM poiuidvisits WHERE dt >= '2016-02-01' and dt <= '2016-03-31' AND onlot = 1 ) T2
+       ON T1.poiid = T2.poiid
+GROUP BY T1.brandid, T2.poiid, T2.uid ;
+
+INSERT INTO TABLE poiuidvisit_agg_onlot_tmp
+SELECT T1.brandid, T2.poiid, T2.uid
+FROM   poidata T1 JOIN (SELECT poi as poiid, uid FROM poiuidvisits WHERE dt >= '2016-04-01' and dt <= '2016-06-22' AND onlot = 1 ) T2
+       ON T1.poiid = T2.poiid
+GROUP BY T1.brandid, T2.poiid, T2.uid ;
+
+
+INSERT INTO poiuidvisit_agg partition (fencetype = 'onlot')
+SELECT brandid, poiid, uid FROM poiuidvisit_agg_onlot_tmp GROUP BY brandid, poiid, uid ;
+
+
+
+
+DROP TABLE IF EXISTS poiuidvisit_agg_onlot_tmp ;
+
+
+DROP TABLE IF EXISTS brandvisitor ;
+CREATE TABLE brandvisitor (brandid INT, uid STRING) PARTITIONED BY (fencetype STRING) ;
+
+SET hive.exec.dynamic.partition=true;
+SET hive.exec.dynamic.partition.mode=nonstrict;
+INSERT INTO brandvisitor PARTITION (fencetype)
+SELECT brandid, uid, fencetype FROM poiuidvisit_agg GROUP BY brandid, uid, fencetype;
+

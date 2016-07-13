@@ -1,0 +1,173 @@
+CREATE TABLE IF NOT EXISTS locvisual_poi_viscnt AS
+SELECT brandid, poiid, count(*) AS viscnt FROM locvisual_poiuid GROUP BY brandid, poiid ;
+
+
+-- prepare data for score calculation, may or may not want to filter by block type
+
+DROP TABLE IF EXISTS locvisual_poi_geoblk_viscnt ;
+CREATE TABLE IF NOT EXISTS locvisual_poi_geoblk_viscnt AS
+SELECT Ta.brandid, Ta.poiid, Ta.totviscnt, Ta.geoblkid, Ta.viscnt AS blkviscnt, Tb.uidcnt AS blkuidcnt
+FROM
+    ( SELECT T1.brandid, T1.poiid,
+             split(T1.ablkdata, ':')[0] AS geoblkid, split(T1.ablkdata, ':')[1] AS viscnt,
+             T2.viscnt AS totviscnt
+      FROM   (SELECT  brandid, poiid, ablkdata
+              FROM    locvisual_poigeoblkid_gblkcatmgr_0215_0410
+              LATERAL VIEW EXPLODE(SPLIT(blkdata, '\\|')) tmptb AS ablkdata ) T1
+              JOIN
+              locvisual_poi_viscnt T2
+              ON      T1.brandid = T2.brandid AND T1.poiid = T2.poiid
+    ) Ta
+    JOIN
+    gblkmeta_reqdim_0328_0410 Tb
+    ON Ta.geoblkid = Tb.geoblkid  ;
+
+
+
+
+
+
+-- the normalized score
+SET hive.auto.convert.join = false;
+DROP TABLE IF EXISTS locvisual_poigeoblkscore_normed_0215_0410 ;
+CREATE TABLE locvisual_poigeoblkscore_normed_0215_0410 (poiid STRING, scores STRING, brandid INT) ;
+
+ADD FILE /home/canliang/locvisual/scoring/uniqueuidcontrast.py ;
+
+INSERT INTO TABLE locvisual_poigeoblkscore_normed_0215_0410
+SELECT T3.poiid, T2.score, T3.brandid FROM (
+    SELECT TRANSFORM(brandid, poiid, totviscnt, geoblkid, blkviscnt, blkuidcnt)
+           USING 'python ./uniqueuidcontrast.py'
+           AS (poiid, score, brandid)
+    FROM   ( SELECT * FROM locvisual_poi_geoblk_viscnt CLUSTER BY brandid, poiid) T1
+    ) T2
+    JOIN
+    ( SELECT * FROM poidata
+      WHERE poiid IS NOT NULL AND hashkey IS NOT NULL
+    ) T3
+    ON T2.poiid = T3.poiid ;
+
+
+
+
+
+
+SET hive.auto.convert.join = false;
+DROP TABLE IF EXISTS locvisual_poigeoblkscore_normed_0215_0410_filtered ;
+CREATE TABLE locvisual_poigeoblkscore_normed_0215_0410_filtered (poiid STRING, scores STRING, brandid INT) ;
+
+ADD FILE /home/canliang/locvisual/scoring/uniqueuidcontrast_filter.py ;
+
+INSERT INTO TABLE locvisual_poigeoblkscore_normed_0215_0410_filtered
+SELECT T3.poiid, T2.score, T3.brandid FROM (
+    SELECT TRANSFORM(brandid, poiid, totviscnt, geoblkid, blkviscnt, blkuidcnt)
+           USING 'python ./uniqueuidcontrast_filter.py'
+           AS (poiid, score, brandid)
+    FROM   ( SELECT * FROM locvisual_poi_geoblk_viscnt CLUSTER BY brandid, poiid) T1
+    ) T2
+    JOIN
+    ( SELECT * FROM poidata
+      WHERE poiid IS NOT NULL AND hashkey IS NOT NULL
+    ) T3
+    ON T2.poiid = T3.poiid ;
+
+
+
+
+
+
+
+
+-- the scores for targetting
+SET hive.auto.convert.join = false;
+DROP TABLE IF EXISTS locvisual_poigeoblkscore_target_0215_0410 ;
+CREATE TABLE locvisual_poigeoblkscore_target_0215_0410 (poiid STRING, scores STRING, brandid INT) ;
+
+ADD FILE /home/canliang/locvisual/scoring/uniqueuidcontrast.py ;
+
+INSERT INTO TABLE locvisual_poigeoblkscore_target_0215_0410
+SELECT T3.poiid, T2.score, T3.brandid FROM (
+    SELECT TRANSFORM(brandid, poiid, totviscnt, geoblkid, blkviscnt, blkuidcnt)
+           USING 'python ./uniqueuidcontrast.py'
+           AS (poiid, score, brandid)
+    FROM   ( SELECT * FROM locvisual_poi_geoblk_viscnt CLUSTER BY brandid, poiid) T1
+    ) T2
+    JOIN
+    ( SELECT * FROM poidata
+      WHERE poiid IS NOT NULL AND hashkey IS NOT NULL
+    ) T3
+    ON T2.poiid = T3.poiid ;
+
+
+
+DROP TABLE IF EXISTS locvisual_poigeoblkscore_target_0215_0410_explode ;
+CREATE TABLE locvisual_poigeoblkscore_target_0215_0410_explode AS
+SELECT brandid, poiid, geoblkid, score
+FROM   ( SELECT T1.brandid, T1.poiid,
+             split(T1.ablkdata, ':')[0] AS geoblkid, split(T1.ablkdata, ':')[1] AS score
+       FROM   (SELECT  brandid, poiid, ablkdata
+               FROM    locvisual_poigeoblkscore_target_0215_0410
+               LATERAL VIEW EXPLODE(SPLIT(scores, ',')) tmptb AS ablkdata ) T1
+       ) T ;
+
+
+
+DROP   TABLE IF EXISTS locvisual_poigeoblkscore_target_0215_0410_brand ;
+CREATE TABLE locvisual_poigeoblkscore_target_0215_0410_brand AS
+SELECT brandid, geoblkid, MAX(score) AS score
+FROM   locvisual_poigeoblkscore_target_0215_0410_explode
+GROUP BY brandid, geoblkid ;
+
+CREATE TABLE locvisual_poigeoblkscore_target_0215_0410_brand_percentile AS
+SELECT brandid,
+       percentile_approx(cast(score as float), 0.25) AS pctl25,
+       percentile_approx(cast(score as float), 0.75) AS pctl75
+FROM   blklearn.locvisual_poigeoblkscore_target_0215_0410_brand group by brandid;
+
+
+
+DROP TABLE IF EXISTS locvisual_poigeoblkscore_target_0215_0410_filtered ;
+CREATE TABLE locvisual_poigeoblkscore_target_0215_0410_filtered AS
+SELECT brandid, geoblkid, score
+FROM   (SELECT  T1.brandid, T1.geoblkid, T1.score, T2.pctl25
+       FROM    locvisual_poigeoblkscore_target_0215_0410_brand T1
+               JOIN
+               locvisual_poigeoblkscore_target_0215_0410_brand_percentile T2
+               ON T1.brandid = T2.brandid
+      ) T
+WHERE  T.score > T.pctl25 ;
+
+
+
+--SELECT T1.brandid, T1.cnt AS cnt1, T2.cnt AS cnt2 FROM
+--(SELECT brandid, count(*) AS cnt FROM locvisual_poigeoblkscore_target_0215_0410_brand GROUP BY brandid) T1
+--JOIN
+--(SELECT brandid, count(*) AS cnt FROM locvisual_poigeoblkscore_target_0215_0410_filtered GROUP BY brandid) T2
+--on T1.brandid = T2.brandid ;
+
+
+-- # -- assemble the filtered list of geoblocks
+DROP TABLE IF EXISTS locvisual_poigeoblkscore_target_0215_0410_filtered_agg ;
+CREATE TABLE locvisual_poigeoblkscore_target_0215_0410_filtered_agg AS
+SELECT poiid, CONCAT_WS(",", COLLECT_LIST(agblkdata)) AS scores, brandid
+FROM   (SELECT T1.brandid, T1.poiid, CONCAT(T1.geoblkid, ':', T1.score) AS agblkdata
+        FROM   locvisual_poigeoblkscore_target_0215_0410_explode T1
+               JOIN
+               locvisual_poigeoblkscore_target_0215_0410_filtered T2
+               ON T1.brandid = T2.brandid AND T1.geoblkid = T2.geoblkid
+        ) T
+GROUP BY poiid, brandid;
+
+
+
+
+
+-- for getting test data
+SELECT T1.geoblkid, T1.uiddata, T2.geoblkid, T2.uids
+FROM  blklearn.gblkuid_dailyagg_pipe_0 T1
+      FULL OUTER JOIN
+      ( SELECT geoblkid, CONCAT_WS("|", COLLECT_LIST(uid)) AS uids
+        FROM blklearn.locvisual_uidpid_daily_gblkcatmgr
+        WHERE dt = "2016-02-15" GROUP BY geoblkid
+      ) T2
+      ON T1.geoblkid = T2.geoblkid limit 100000;

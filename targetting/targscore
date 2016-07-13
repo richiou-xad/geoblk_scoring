@@ -1,0 +1,65 @@
+
+-- join these scores back to the brandid-poiid-geoblkid-score.
+-- Critical: because we are using aggreqpct as score,
+--           it is critical that each geoblock used in the aggregation appear at least once for at least one of the pois.
+--           This requirement on itself is unnecessary if only RTI geoblock targetting is concerned.
+--           But this mathematical consistency shouldn't be relaxed just because we are lazy, also, later the score will
+--           be used for other purposes and people will start to make assumptions of what it means.
+--           clear definition and rigorous consistency is critical for large system integration.
+
+
+DROP   TABLE IF     EXISTS gblktarg_poigblk_targscore ;
+CREATE TABLE IF NOT EXISTS gblktarg_poigblk_targscore (brandid INT, poiid INT, geoblkid INT, score DOUBLE, aggreqpct DOUBLE) PARTITIONED BY (fencetype STRING) ;
+
+
+INSERT OVERWRITE TABLE gblktarg_poigblk_targscore PARTITION (fencetype)
+SELECT T1.brandid, T1.poiid, T1.geoblkid, T2.score, T2.aggreqpct, T2.fencetype
+FROM   gblkstats_poivis_snapshot T1
+       JOIN
+       (SELECT brandid, geoblkid, score, aggreqpct, fencetype FROM gblkperformetric_brdtarg_cumulreq) T2
+       ON T1.brandid = T2.brandid AND T1.geoblkid = T2.geoblkid AND T1.fencetype = T2.fencetype
+;
+
+
+
+-- create a unique list of poigblk mappings for targetting scores.
+-- guarantees all the gblks for a brand is included once and once only
+DROP TABLE IF EXISTS gblktarg_poigblk_unique ;
+CREATE TABLE gblktarg_poigblk_unique AS
+SELECT brandid, MIN(poiid) AS poiid, geoblkid FROM gblktarg_poigblk_targscore GROUP BY brandid, geoblkid ;
+
+
+-- merging pipeline. need to put data into the right format, along the way, we do the scaling of reqpct as well.
+-- the round off here is essential. to make sure that when threshold = 0, there will be no geoblks.
+-- load not well balanced
+
+-- need to make sure that the repetition of geoblocks is minimized among all the geoblocks. Otherwise two many of them.
+--
+DROP TABLE IF EXISTS poigeoblkscore_target_0215_0410 ;
+CREATE TABLE poigeoblkscore_target_0215_0410 AS
+SELECT poiid, CONCAT_WS(",", COLLECT_LIST(agblkscore)) AS scores
+FROM   (SELECT T1.poiid, CONCAT(T1.geoblkid, ':', ceil(T1.aggreqpct*0.75*1e5)*1e-5) AS agblkscore
+        FROM   gblktarg_poigblk_targscore T1 JOIN gblktarg_poigblk_unique T2
+               ON T1.brandid = T2.brandid AND T1.geoblkid = T2.geoblkid AND T1.poiid = T2.poiid) T
+GROUP BY poiid;
+
+
+
+select max(aggreqpct) from blklearn.gblktarg_poigblk_targscore where fencetype = 'onlot' and poiid = 28599084 order by score desc limit 100 ;
+
+
+
+select * from blklearn.gblktarg_poigblk_targscore where fencetype = 'onlot' and poiid = 20998943 order by score desc limit 100 ;
+
+
+select * from blklearn.poigeoblkscore_target_0215_0410     where poiid = 20998943 ;
+select * from blklearn.poigeoblkscore_target_0215_0410_old where poiid = 20998943 ;
+
+select * from blklearn.gblktarg_poigblk_targscore WHERE fencetype = 'onlot' AND poiid = 20998943 order by score desc limit 500 ;
+
+
+
+poigeoblkscore_target_0215_0410
+
+
+

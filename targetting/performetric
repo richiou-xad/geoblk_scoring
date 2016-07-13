@@ -1,0 +1,78 @@
+-- get the brand level scores for ranking for SVR optimization
+SET hive.execution.engine=mr;
+SET hive.exec.dynamic.partition=true ;
+SET hive.exec.dynamic.partition.mode=nonstrict ;
+
+DROP TABLE IF EXISTS gblkstats_brdtargscore ;
+CREATE TABLE gblkstats_brdtargscore (brandid INT, geoblkid INT, viscnt INT, visreqcnt INT, uidcnt INT, uidreqcnt INT, score DOUBLE) PARTITIONED BY (fencetype STRING) ;
+
+
+
+-- brand level geoblk vis/uid scores for targetting
+INSERT INTO TABLE gblkstats_brdtargscore PARTITION (fencetype)
+SELECT brandid, T1.geoblkid, T1.uidcnt AS viscnt, T1.reqcnt AS visreqcnt, T2.uidcnt AS uidcnt, T2.reqcnt AS uidreqcnt,
+       CAST(T1.uidcnt AS FLOAT) / T2.uidcnt AS score, T1.fencetype AS fencetype
+FROM   gblkstats_brdvis_snapshot T1 JOIN gblkstats_snapshot T2 ON T1.geoblkid = T2.geoblkid;
+
+
+
+-- filter out noisy ones at poi level and join to get scores.
+-- this forms the base layer of geoblocks that will be used for targetting, visualization
+DROP TABLE IF EXISTS gblk_poifiltered ;
+CREATE TABLE IF NOT EXISTS gblk_poifiltered (brandid INT, geoblkid INT, score DOUBLE) PARTITIONED BY (fencetype STRING) ;
+INSERT OVERWRITE TABLE gblk_poifiltered PARTITION (fencetype)
+SELECT Ta.brandid, Ta.geoblkid, Tb.score, Ta.fencetype
+FROM   (SELECT T1.brandid, T1.geoblkid, T1.fencetype
+        FROM   (SELECT brandid, geoblkid, fencetype FROM gblkstats_poivis_snapshot WHERE uidcnt > 2 GROUP BY brandid, geoblkid, fencetype) T1
+               JOIN
+               (SELECT geoblkid FROM gblkstats_snapshot WHERE uidcnt >= 10) T2
+               ON T1.geoblkid = T2.geoblkid
+        GROUP BY T1.brandid, T1.geoblkid, T1.fencetype
+       ) Ta
+       JOIN
+       gblkstats_brdtargscore Tb
+       ON Ta.brandid = Tb.brandid AND Ta.geoblkid = Tb.geoblkid AND Ta.fencetype = Tb.fencetype
+;
+
+
+
+
+
+
+-- might want to create count for different 'hitrate'. The ranking is derived based on long term data.
+
+-- For the various curves, all the data needed are in uid2gblkv2_weekly's one week segment.
+CREATE TABLE gblkscore_oneweekagg_tmp AS
+SELECT geoblkid, COUNT(*) AS uidcnt, SUM(reqcnt) AS reqcnt
+FROM uid2gblkv2_weekly WHERE weekcode='160418160425' GROUP BY geoblkid;
+
+
+
+
+
+-- calculate cumulative percentage of requests available.
+-- note that since we are using 1 wk data, some of the geoblocks will be excluded. It is not a bad thing.
+DROP TABLE IF EXISTS gblkperformetric_brdtarg_cumulreq ;
+CREATE TABLE gblkperformetric_brdtarg_cumulreq (brandid INT, geoblkid INT, score DOUBLE, aggreqcnt BIGINT, aggreqpct DOUBLE) PARTITIONED BY (fencetype STRING) ;
+
+ADD FILE /home/canliang/locvisual/targetting/gblktarg_aggreq.py ;
+
+INSERT OVERWRITE TABLE gblkperformetric_brdtarg_cumulreq PARTITION (fencetype)
+SELECT Ta.brandid, Ta.geoblkid, Ta.score, Ta.aggreqcnt, (CAST(Ta.aggreqcnt AS DOUBLE)/Tb.totreqcnt), Ta.fencetype
+FROM   (
+        SELECT TRANSFORM (brandid, geoblkid, score, reqcnt, fencetype)
+               USING     'python ./gblktarg_aggreq.py'
+               AS        (brandid, geoblkid, score, aggreqcnt, fencetype)
+        FROM (SELECT T1.brandid, T1.geoblkid, T1.score, T2.reqcnt, T1.fencetype
+              FROM   ( SELECT brandid, geoblkid, score, fencetype FROM gblk_poifiltered  ) T1
+                     JOIN
+                     gblkscore_oneweekagg_tmp T2
+                     ON T1.geoblkid = T2.geoblkid
+              DISTRIBUTE BY brandid SORT BY brandid, fencetype, score DESC
+             ) T3
+        ) Ta
+       JOIN
+       (SELECT SUM(reqcnt) AS totreqcnt FROM gblkscore_oneweekagg_tmp) Tb
+;
+
+

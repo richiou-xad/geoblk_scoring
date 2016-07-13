@@ -1,0 +1,59 @@
+# how does indexing in hive work?
+
+
+# ec2-23-21-155-74.compute-1.amazonaws.com
+
+ec2-52-0-102-24.compute-1.amazonaws.com
+
+# the index builder only works under linux environment
+scp ec2-23-21-155-74.compute-1.amazonaws.com:/home/canliang/region.txt ./
+
+scp region.txt 10.10.10.62:/home/canliang/Projects_Pipelines/blklearn
+scp nise_spatial_index_*  10.10.10.62:/home/canliang/Projects_Pipelines/blklearn/
+scp 10.10.10.62:/home/canliang/Projects_Pipelines/blklearn/region_idx ./
+
+
+scp adrequest.py    gw01.internal.xad.com:/home/canliang/
+
+scp /Users/canliang/sandbox/location_intent/canliangMisc/blklearn/SpatialIdxTool/nise_spatial_index_reader    gw01.internal.xad.com:/home/canliang/
+scp /Users/canliang/sandbox/location_intent/canliangMisc/blklearn/SpatialIdxTool/region_idx    ec2-23-21-155-74.compute-1.amazonaws.com:/home/canliang/
+
+
+
+lat, lon, request_id, ctr, sar, country, date, hour
+) using './nise_spatial_index_reader -i ./landuse_SpatialIdx -z -n 1'
+AS (lat, lon, request_id, ctr, sar, country, dt, hour, cat)
+
+
+
+describe temp;
+
+INSERT OVERWRITE LOCAL DIRECTORY '/home/canliang/requests' row format delimited FIELDS TERMINATED BY '\t' SELECT * FROM temp limit 1000 ;
+
+./nise_spatial_index_reader -i Idx_file -z -n 5 < burgerKing_location.txt
+
+
+
+Making Multiple Passes over the Same Data
+hive> FROM history
+> INSERT OVERWRITE sales SELECT * WHERE action='purchased'
+> INSERT OVERWRITE credits SELECT * WHERE action='returned';
+
+
+
+use maponics and poi to do something.
+
+get time pattern, day vs night. (how to compare)
+this provides a good way for QA the quality of the polygons to eliminate the traffic factor.
+study time pattern, do some clustering.
+
+
+step one is simply counting and finding highly correlated factors. We can then pick out groups of polygons, collect them and
+plot as groups... geoserver can do this, as a reach study.
+
+
+
+# download info residential data only for CA,
+# for maponic_z9, create small table whose centroid is close to the bay area polygons we are working with.
+# then label all the zip9s in the mapo small table that are not present in infousa as biz, the rest os residential.
+# check how well this aligns with the map.

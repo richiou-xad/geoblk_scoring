@@ -1,0 +1,5 @@
+CREATE TABLE gblktarg_brdinitthld AS SELECT brandid, 0.001 FROM poidata GROUP BY brandid ;
+
+
+hive -e 'SELECT * from blklearn.gblktarg_brdinitthld ; ' > threshold.txt
+

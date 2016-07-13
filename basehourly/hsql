@@ -1,0 +1,42 @@
+-- need to log in as xad, otherwise no permission to the data
+
+DROP TABLE IF EXISTS rawuidlocation ;
+CREATE EXTERNAL TABLE rawuidlocation
+PARTITIONED BY (cntry string, prodtype string, year string, month string, day string, hour string)
+  ROW FORMAT SERDE
+  'org.apache.hadoop.hive.serde2.avro.AvroSerDe'
+  STORED AS INPUTFORMAT
+  'org.apache.hadoop.hive.ql.io.avro.AvroContainerInputFormat'
+  OUTPUTFORMAT
+  'org.apache.hadoop.hive.ql.io.avro.AvroContainerOutputFormat'
+  TBLPROPERTIES (
+    'avro.schema.literal'='{"type":"record",
+                            "name":"pig_output",
+                            "fields":[{"name":"r_timestamp","type":["null","long"]},
+                                      {"name":"pub_id","type":["null","int"]},
+                                      {"name":"tsrc_id","type":["null","long"]},
+                                      {"name":"uid","type":["null","string"]},
+                                      {"name":"uid_type","type":["null","string"]},
+                                      {"name":"country","type":["null","string"]},
+                                      {"name":"zip","type":["null","string"]},
+                                      {"name":"latitude","type":["null","double"]},
+                                      {"name":"longitude","type":["null","double"]},
+                                      {"name":"sl_adjusted_confidence","type":["null","int"]},
+                                      {"name":"is_repeated_user","type":["null","boolean"]},
+                                      {"name":"geo_block_id","type":["null",{"type":"array","items":{"type":"record","name":"geo_block_id","fields":[{"name":"geo_block_id_0","type":["null","int"]}]}}]}]}'
+                                      );
+-- LOCATION 'hdfs://data/location/' ;
+
+ALTER TABLE rawuidlocation
+ADD PARTITION (cntry='us', prodtype='display', year='2016', month='05', day='09', hour='00')
+    LOCATION  '/data/location/us/display/2016/05/09/00/';
+
+
+
+select * from rawuidlocation limit 10;
+
+
+
+ALTER TABLE rawuidlocation ADD PARTITION (cntry='us', prodtype='display', year='2016', month='05', day='14', hour='00') LOCATION  '/data/location/us/display/2016/05/14/00/';
+
+

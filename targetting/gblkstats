@@ -1,0 +1,55 @@
+-- this part is geoblock characterization using data over long time window,
+-- determines the fundamental set of geoblocks will be valuable for any scoring
+
+
+SET hive.exec.dynamic.partition=true ;
+SET hive.exec.dynamic.partition.mode=nonstrict ;
+
+
+-- base data for aggregation: aggregate over two months' uid2gblk visitation data
+CREATE TABLE IF NOT EXISTS gblkuid_snapshot AS
+SELECT geoblkid, uid, SUM(reqcnt) AS reqcnt, SUM(hourcnt) AS hourcnt, SUM(daycnt) AS daycnt
+FROM   uid2gblkv2_weekly WHERE (weekcode >= '160229160307' AND weekcode <= '160418160425')
+GROUP BY geoblkid, uid ;
+
+
+
+
+-- long time window aggregation at geoblk level,
+-- not for targetting evaluation, but for geoblk profiling (including gblk2poi association)
+CREATE TABLE IF NOT EXISTS gblkstats_snapshot AS
+SELECT geoblkid, COUNT(*) AS uidcnt, SUM(reqcnt) AS reqcnt FROM gblkuid_snapshot GROUP BY geoblkid ;
+
+
+
+
+-- long time window aggregation at brand level for brand visitors
+CREATE TABLE IF NOT EXISTS gblkstats_brdvis_snapshot (brandid INT, geoblkid INT, uidcnt INT, reqcnt INT) PARTITIONED BY (fencetype STRING) ;
+
+INSERT OVERWRITE TABLE gblkstats_brdvis_snapshot partition (fencetype)
+SELECT T.brandid, T.geoblkid, COUNT(*), SUM(T.reqcnt), T.fencetype
+FROM   (SELECT Ta.brandid AS brandid, Tb.geoblkid AS geoblkid, Tb.uid AS uid, SUM(Tb.reqcnt) AS reqcnt, Ta.fencetype
+        FROM   (SELECT brandid, uid, fencetype FROM brandvisitor) Ta
+               JOIN gblkuid_snapshot  Tb ON Ta.uid = Tb.uid
+        GROUP BY Ta.brandid, Tb.geoblkid, Tb.uid, Ta.fencetype
+       ) T
+GROUP BY T.brandid, T.geoblkid, T.fencetype ;
+
+
+
+
+-- long time window aggregation at poi level for poi visitors
+-- This will be used for all poi level score calculation
+CREATE TABLE IF NOT EXISTS gblkstats_poivis_snapshot (brandid INT, poiid INT, geoblkid INT, uidcnt INT, reqcnt INT) PARTITIONED BY (fencetype STRING) ;
+
+INSERT OVERWRITE TABLE gblkstats_poivis_snapshot PARTITION (fencetype)
+SELECT T.brandid, T.poiid, T.geoblkid, COUNT(*), SUM(T.reqcnt), T.fencetype
+FROM   (SELECT Ta.brandid AS brandid, Ta.poiid AS poiid, Tb.geoblkid AS geoblkid, Tb.uid AS uid, SUM(Tb.reqcnt) AS reqcnt, Ta.fencetype
+        FROM   (SELECT brandid, poiid, uid, fencetype FROM poivisitor) Ta
+               JOIN gblkuid_snapshot  Tb ON Ta.uid = Tb.uid
+        GROUP BY Ta.brandid, Ta.poiid, Tb.geoblkid, Tb.uid, Ta.fencetype
+       ) T
+GROUP BY T.brandid, T.poiid, T.geoblkid, T.fencetype ;
+
+
+
